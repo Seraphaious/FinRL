@@ -1,11 +1,16 @@
 from __future__ import annotations
+from stockstats import StockDataFrame as Sdf
+from pathlib import Path
+from datetime import datetime, timedelta
+from pandas.tseries.offsets import MonthEnd
 
+from dateutil.relativedelta import relativedelta
 import alpaca_trade_api as tradeapi
 import exchange_calendars as tc
 import numpy as np
 import pandas as pd
 import pytz
-from stockstats import StockDataFrame as Sdf
+import os
 
 
 class AlpacaProcessor:
@@ -18,19 +23,8 @@ class AlpacaProcessor:
         else:
             self.api = api
 
-    def download_data(
-        self, ticker_list, start_date, end_date, time_interval
-    ) -> pd.DataFrame:
-        """
-        ticker_list : list string of ticket
-        time_interval: time interval
-        start_date : start date of America/New_York time
-        end_date : end date of America/New_York time
 
-        The function tries to retrieve the data, between the start date and the end date, from the Alpaca server.
-        if time_interval < 1D: period of data retrieved is the opening time of the New York Stock Exchange (NYSE) (from 9:30 am to 4:00 pm), in UTC offset zone.
-        if time_interval >= 1D: each bar is the midnight of the day in America/New_York time, in UTC offset zone.
-        """
+    def download_data(self, ticker_list, start_date, end_date, time_interval, content_folder) -> pd.DataFrame:
         self.start = start_date
         self.end = end_date
         self.time_interval = time_interval
@@ -59,8 +53,11 @@ class AlpacaProcessor:
         # reformat to finrl expected schema
         data_df = data_df.reset_index().rename(columns={"symbol": "tic"})
         data_df["timestamp"] = data_df["timestamp"].apply(lambda x: x.tz_convert(NY))
+       # print("Succesfully downloaded data")
+
 
         return data_df
+
 
     def clean_data(self, df):
         tic_list = np.unique(df.tic.values)
@@ -77,7 +74,7 @@ class AlpacaProcessor:
         times = []
         for day in trading_days:
             NY = "America/New_York"
-            current_time = pd.Timestamp(day + " 09:30:00").tz_localize(NY)
+            current_time = pd.Timestamp(day + " 10:30:00").tz_localize(NY)
             for i in range(390):
                 times.append(current_time)
                 current_time += pd.Timedelta(minutes=1)
@@ -162,6 +159,7 @@ class AlpacaProcessor:
             "boll_ub",
             "boll_lb",
             "rsi_30",
+            "cci_30",
             "dx_30",
             "close_30_sma",
             "close_60_sma",
@@ -193,11 +191,12 @@ class AlpacaProcessor:
             )
         df = df.sort_values(by=["date", "tic"])
         df = df.rename(columns={"date": "timestamp"})
-        #        print("Succesfully add technical indicators")
+        # print("Succesfully add technical indicators")
+
         return df
 
-    def add_vix(self, data):
-        vix_df = self.download_data(["VIXY"], self.start, self.end, self.time_interval)
+    def add_vix(self, data, content_folder):
+        vix_df = self.download_data(["VIXY"], self.start, self.end, self.time_interval, content_folder)
         cleaned_vix = self.clean_data(vix_df)
         vix = cleaned_vix[["timestamp", "close"]]
         vix = vix.rename(columns={"close": "VIXY"})
@@ -205,6 +204,10 @@ class AlpacaProcessor:
         df = data.copy()
         df = df.merge(vix, on="timestamp")
         df = df.sort_values(["timestamp", "tic"]).reset_index(drop=True)
+
+       # print("Succesfully cleaned and processed data")
+
+
         return df
 
     def calculate_turbulence(self, data, time_period=252):
@@ -392,3 +395,43 @@ class AlpacaProcessor:
         turb_df = self.api.get_bars(["VIXY"], time_interval, limit=1).df
         latest_turb = turb_df["close"].values
         return latest_price, latest_tech, latest_turb
+
+
+    def process_monthly_data(self, ticker_list, start_date, end_date, time_interval, content_folder):
+        NY = "America/New_York"
+        start_date = pd.Timestamp(start_date, tz=NY)
+        end_date = pd.Timestamp(end_date, tz=NY)
+
+        current_start = start_date
+        full_data_df = pd.DataFrame()
+
+        while current_start < end_date:
+            current_end = current_start + pd.DateOffset(months=1) - pd.Timedelta(days=1)
+
+            if current_end > end_date:
+                current_end = end_date
+
+            content_dir = Path(f"./content/{content_folder}")
+            content_dir.mkdir(parents=True, exist_ok=True)
+            monthly_data_file = content_dir / f"{current_start.strftime('%Y-%m')}_data.csv"
+
+            if os.path.exists(monthly_data_file):
+                final_data = pd.read_csv(monthly_data_file)
+                print(f"Read {current_start.strftime('%Y-%m')} data")
+            else:
+                # Download data for the current month
+                monthly_data = self.download_data(ticker_list, current_start.strftime("%Y-%m-%d"), current_end.strftime("%Y-%m-%d"), time_interval, content_folder)
+                cleaned_data = self.clean_data(monthly_data)
+                data_with_indicators = self.add_technical_indicator(cleaned_data)
+                final_data = self.add_vix(data_with_indicators, content_folder)
+
+                # Save current month's data to a CSV
+                final_data.to_csv(monthly_data_file, index=False)
+                print(f"Processed and Saved {current_start.strftime('%Y-%m')} data")
+
+            full_data_df = full_data_df.append(final_data, ignore_index=True)
+
+            current_start = current_end + pd.Timedelta(days=1)
+
+
+        return full_data_df

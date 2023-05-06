@@ -11,7 +11,7 @@ from finrl.meta.data_processors.processor_yahoofinance import (
 
 
 class DataProcessor:
-    def __init__(self, data_source, **kwargs):
+    def __init__(self, data_source, tech_indicator_list=None, **kwargs):
         if data_source == "alpaca":
             try:
                 API_KEY = kwargs.get("API_KEY")
@@ -31,14 +31,32 @@ class DataProcessor:
         else:
             raise ValueError("Data source input is NOT supported yet.")
 
+        if tech_indicator_list is None:
+            self.tech_indicator_list = [
+                "macd",
+                "boll_ub",
+                "boll_lb",
+                "rsi_30",
+                "cci_30",
+                "dx_30",
+                "close_30_sma",
+                "close_60_sma",
+            ]
+        else:
+            self.tech_indicator_list = tech_indicator_list
+
+    # The rest of your DataProcessor class code remains unchanged
+
+
     def download_data(
-        self, ticker_list, start_date, end_date, time_interval
+        self, ticker_list, start_date, end_date, time_interval, content_folder
     ) -> pd.DataFrame:
         df = self.processor.download_data(
             ticker_list=ticker_list,
             start_date=start_date,
             end_date=end_date,
             time_interval=time_interval,
+            content_folder=content_folder,
         )
         return df
 
@@ -55,13 +73,12 @@ class DataProcessor:
 
     def add_turbulence(self, df) -> pd.DataFrame:
         df = self.processor.add_turbulence(df)
-
         return df
 
     def add_vix(self, df) -> pd.DataFrame:
-        df = self.processor.add_vix(df)
-
+        df = self.processor.add_vix(df, content_folder)
         return df
+
 
     def df_to_array(self, df, if_vix) -> np.array:
         price_array, tech_array, turbulence_array = self.processor.df_to_array(
@@ -74,3 +91,17 @@ class DataProcessor:
         tech_array[tech_inf_positions] = 0
 
         return price_array, tech_array, turbulence_array
+
+
+    def process_monthly_data(
+        self, ticker_list, start_date, end_date, time_interval, content_folder
+    ) -> pd.DataFrame:
+        df = self.processor.process_monthly_data(
+            ticker_list=ticker_list,
+            start_date=start_date,
+            end_date=end_date,
+            time_interval=time_interval,
+            content_folder=content_folder,
+        )
+        return df
+    
